@@ -1,5 +1,9 @@
 #include <bits/stdc++.h>
+#include <chrono>
+#include <curl/curl.h>
+
 using namespace std;
+using namespace chrono;
 
 int n = 0, m = 0;
 int **adj = nullptr;
@@ -179,9 +183,32 @@ int main() {
         cout << endl;
     }
 
-    cout << "DSATUR: " << DSATUR(n, adj) << endl;
-    cout << "Branch & Bound: " << BranchAndBound(n, adj) << endl;
-    cout << "Tabu: " << TabuSearch(n, adj) << endl;
+    // DSATUR
+    auto t1 = chrono::high_resolution_clock::now();
+    int res1 = DSATUR(n, adj);
+    auto t2 = chrono::high_resolution_clock::now();
+    cout << "DSATUR: " << res1 
+        << " | Time: " 
+        << chrono::duration_cast<chrono::milliseconds>(t2 - t1).count() 
+        << " ms\n";
+
+    // Branch & Bound
+    auto t3 = chrono::high_resolution_clock::now();
+    int res2 = BranchAndBound(n, adj);
+    auto t4 = chrono::high_resolution_clock::now();
+    cout << "BnB: " << res2 
+        << " | Time: " 
+        << chrono::duration_cast<chrono::milliseconds>(t4 - t3).count() 
+        << " ms\n";
+
+    // Tabu
+    auto t5 = chrono::high_resolution_clock::now();
+    int res3 = TabuSearch(n, adj);
+    auto t6 = chrono::high_resolution_clock::now();
+    cout << "Tabu: " << res3 
+        << " | Time: " 
+        << chrono::duration_cast<chrono::milliseconds>(t6 - t5).count() 
+        << " ms\n";
 
     // free memory
     for (int i = 0; i <= n; i++) {
