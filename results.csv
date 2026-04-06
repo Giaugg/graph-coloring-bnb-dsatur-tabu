@@ -1,0 +1,6 @@
+filename,algorithm,result,time_ms,best,match
+testcase1.txt,DSATUR,4,0,3,0
+testcase1.txt,Tabu,3,0,3,1
+testcase1.txt,BnB,3,0,3,1
+dsjc250.5.col,DSATUR,40,12,28,0
+dsjc250.5.col,Tabu,28,263,28,1

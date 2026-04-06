@@ -1,34 +1,64 @@
 #include <bits/stdc++.h>
 #include <chrono>
-#include <curl/curl.h>
 
 using namespace std;
 using namespace chrono;
 
-int n = 0, m = 0;
-int **adj = nullptr;
+struct TestCase {
+    string filename;
+    int n, m, best_k;
+};
 
-// read graph from DIMACS format
+//////////////////////////////////////////////////
+// LOAD TESTCASES
+//////////////////////////////////////////////////
+vector<TestCase> loadTestcases(const string &file) {
+    vector<TestCase> tests;
+    ifstream f(file);
+    string line;
+
+    while (getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+
+        stringstream ss(line);
+        string token;
+
+        TestCase t;
+        int enabled;
+
+        getline(ss, t.filename, ',');
+        getline(ss, token, ','); t.n = stoi(token);
+        getline(ss, token, ','); t.m = stoi(token);
+        getline(ss, token, ','); t.best_k = stoi(token);
+        getline(ss, token, ','); enabled = stoi(token);
+
+        if (enabled == 1)
+            tests.push_back(t);
+    }
+
+    return tests;
+}
+
+//////////////////////////////////////////////////
+// READ DIMACS
+//////////////////////////////////////////////////
 void readDIMACS(const string &filename, int &n, int &m, int ***adj) {
     ifstream file(filename);
     if (!file.is_open()) {
-        cerr << "Cannot open file!\n";
+        cerr << "Cannot open file: " << filename << endl;
         return;
     }
 
     string line;
 
     while (getline(file, line)) {
-        if (line.empty()) continue;
-
-        if (line[0] == 'c') continue;
+        if (line.empty() || line[0] == 'c') continue;
 
         if (line[0] == 'p') {
             string tmp1, tmp2;
             stringstream ss(line);
             ss >> tmp1 >> tmp2 >> n >> m;
 
-            // cấp phát động
             *adj = new int*[n + 1];
             for (int i = 0; i <= n; i++) {
                 (*adj)[i] = new int[n + 1];
@@ -50,62 +80,108 @@ void readDIMACS(const string &filename, int &n, int &m, int ***adj) {
     file.close();
 }
 
-// DSATUR heuristic
+//////////////////////////////////////////////////
+// FREE MEMORY
+//////////////////////////////////////////////////
+void freeGraph(int **adj, int n) {
+    for (int i = 0; i <= n; i++) delete[] adj[i];
+    delete[] adj;
+}
+
+//////////////////////////////////////////////////
+// TIMER
+//////////////////////////////////////////////////
+template <typename Func>
+pair<int, long long> measure(Func f) {
+    auto start = high_resolution_clock::now();
+    int result = f();
+    auto end = high_resolution_clock::now();
+    long long time = duration_cast<milliseconds>(end - start).count();
+    return {result, time};
+}
+
+//////////////////////////////////////////////////
+// DSATUR
+//////////////////////////////////////////////////
 int DSATUR(int n, int **adj) {
     vector<int> color(n+1, 0);
     vector<int> degree(n+1, 0);
+    vector<int> sat(n+1, 0);
 
+    // tính degree
     for (int i = 1; i <= n; i++)
         for (int j = 1; j <= n; j++)
             if (adj[i][j]) degree[i]++;
 
-    for (int step = 1; step <= n; step++) {
-        int u = -1, maxSat = -1;
+    // chọn đỉnh đầu tiên: degree lớn nhất
+    int first = 1;
+    for (int i = 2; i <= n; i++)
+        if (degree[i] > degree[first])
+            first = i;
 
+    color[first] = 1;
+
+    // update saturation
+    for (int j = 1; j <= n; j++)
+        if (adj[first][j])
+            sat[j]++;
+
+    // lặp
+    for (int step = 2; step <= n; step++) {
+        int u = -1;
+
+        // chọn đỉnh: max sat → tie-break degree
         for (int i = 1; i <= n; i++) {
             if (color[i] != 0) continue;
 
-            set<int> used;
-            for (int j = 1; j <= n; j++)
-                if (adj[i][j] && color[j])
-                    used.insert(color[j]);
-
-            if ((int)used.size() > maxSat) {
-                maxSat = used.size();
+            if (u == -1 || 
+                sat[i] > sat[u] || 
+                (sat[i] == sat[u] && degree[i] > degree[u])) {
                 u = i;
             }
         }
 
-        set<int> used;
+        // tìm màu nhỏ nhất hợp lệ
+        vector<bool> used(n+1, false);
         for (int j = 1; j <= n; j++)
             if (adj[u][j] && color[j])
-                used.insert(color[j]);
+                used[color[j]] = true;
 
         int c = 1;
-        while (used.count(c)) c++;
+        while (used[c]) c++;
 
         color[u] = c;
+
+        // update saturation
+        for (int v = 1; v <= n; v++) {
+            if (adj[u][v] && color[v] == 0) {
+                // kiểm tra xem màu c đã xuất hiện chưa
+                bool found = false;
+                for (int k = 1; k <= n; k++) {
+                    if (adj[v][k] && color[k] == c) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) sat[v]++;
+            }
+        }
     }
 
-    int maxColor = 0;
-    for (int i = 1; i <= n; i++)
-        maxColor = max(maxColor, color[i]);
-
-    return maxColor;
+    return *max_element(color.begin(), color.end());
 }
 
-
-// Branch & Bound
-int best = INT_MAX;
-
-bool isSafe(int u, int c, int **adj, int color[]) {
+//////////////////////////////////////////////////
+// BRANCH & BOUND
+//////////////////////////////////////////////////
+bool isSafe(int u, int c, int n, int **adj, int color[]) {
     for (int v = 1; v <= n; v++)
         if (adj[u][v] && color[v] == c)
             return false;
     return true;
 }
 
-void BnB(int u, int usedColors, int **adj, int color[]) {
+void BnB(int u, int usedColors, int &best, int n, int **adj, int color[]) {
     if (u > n) {
         best = min(best, usedColors);
         return;
@@ -114,9 +190,9 @@ void BnB(int u, int usedColors, int **adj, int color[]) {
     if (usedColors >= best) return;
 
     for (int c = 1; c <= usedColors + 1; c++) {
-        if (isSafe(u, c, adj, color)) {
+        if (isSafe(u, c, n, adj, color)) {
             color[u] = c;
-            BnB(u + 1, max(usedColors, c), adj, color);
+            BnB(u + 1, max(usedColors, c), best, n, adj, color);
             color[u] = 0;
         }
     }
@@ -124,23 +200,20 @@ void BnB(int u, int usedColors, int **adj, int color[]) {
 
 int BranchAndBound(int n, int **adj) {
     int color[1000] = {0};
-    best = INT_MAX;
-    BnB(1, 0, adj, color);
+    int best = INT_MAX;
+    BnB(1, 0, best, n, adj, color);
     return best;
 }
 
-
-// Tabu Search heuristic
-int TabuSearch(int n, int **adj, int maxIter = 1000) {
+//////////////////////////////////////////////////
+// TABU SEARCH (simple)
+//////////////////////////////////////////////////
+int TabuSearch(int n, int **adj, int maxIter, int k) {
     vector<int> color(n+1);
     srand(time(0));
 
-    int k = DSATUR(n, adj); // bắt đầu từ nghiệm tốt
-
     for (int i = 1; i <= n; i++)
         color[i] = rand() % k + 1;
-
-    int bestConflict = INT_MAX;
 
     for (int iter = 0; iter < maxIter; iter++) {
         int conflict = 0;
@@ -150,71 +223,106 @@ int TabuSearch(int n, int **adj, int maxIter = 1000) {
                 if (adj[i][j] && color[i] == color[j])
                     conflict++;
 
-        bestConflict = min(bestConflict, conflict);
-
         if (conflict == 0) return k;
 
-        // random move
         int u = rand() % n + 1;
-        int newColor = rand() % k + 1;
-        color[u] = newColor;
+        color[u] = rand() % k + 1;
     }
 
-    return k; // heuristic nên không đảm bảo tối ưu
+    return k;
 }
 
-int main() {
+//////////////////////////////////////////////////
+// RUN ALL TESTS
+//////////////////////////////////////////////////
+void runAllTests(const string &testFile, const string &outputFile) {
+    vector<TestCase> tests = loadTestcases(testFile);
 
-    const string filename = "testcase1.txt";
+    ofstream out(outputFile);
+    out << "filename,algorithm,result,time_ms,best,match\n";
 
-    readDIMACS(filename, n, m, &adj);
+    for (const TestCase &tc : tests) {
+        int n, m;
+        int **adj = nullptr;
 
-    cout << "Number of vertices: " << n << endl;
-    cout << "Number of edges: " << m << endl;
+        // 📥 Load graph
+        string path = "datasets/" + tc.filename;
+        readDIMACS(path, n, m, &adj);
 
-    // In ma trận
-    for (int i = 1; i <= n; i++) {
-        cout << "Vertex " << i << ": ";
-        for (int j = 1; j <= n; j++) {
-            if (adj[i][j]) {
-                cout << j << " ";
-            }
+        cout << "Running: " << tc.filename << endl;
+
+        // ===================== DSATUR =====================
+        pair<int, long long> dsaturRes = measure([&]() {
+            return DSATUR(n, adj);
+        });
+
+        int dsaturColor = dsaturRes.first;
+        long long dsaturTime = dsaturRes.second;
+
+        out << tc.filename << ",DSATUR,"
+            << dsaturColor << "," << dsaturTime << ","
+            << tc.best_k << ","
+            << (dsaturColor == tc.best_k) << "\n";
+
+
+        // ===================== TABU =====================
+        pair<int, long long> tabuRes = measure([&]() {
+            return TabuSearch(n, adj, 1000, tc.best_k);
+        });
+
+        int tabuColor = tabuRes.first;
+        long long tabuTime = tabuRes.second;
+
+        out << tc.filename << ",Tabu,"
+            << tabuColor << "," << tabuTime << ","
+            << tc.best_k << ","
+            << (tabuColor == tc.best_k) << "\n";
+
+
+        // ===================== BRANCH & BOUND =====================
+        if (n <= 100) {
+            pair<int, long long> bnbRes = measure([&]() {
+                return BranchAndBound(n, adj);
+            });
+
+            int bnbColor = bnbRes.first;
+            long long bnbTime = bnbRes.second;
+
+            out << tc.filename << ",BnB,"
+                << bnbColor << "," << bnbTime << ","
+                << tc.best_k << ","
+                << (bnbColor == tc.best_k) << "\n";
         }
-        cout << endl;
+
+        // 🧹 Free memory
+        freeGraph(adj, n);
+
+        cout << "Done: " << tc.filename << "\n\n";
     }
 
-    // DSATUR
-    auto t1 = chrono::high_resolution_clock::now();
-    int res1 = DSATUR(n, adj);
-    auto t2 = chrono::high_resolution_clock::now();
-    cout << "DSATUR: " << res1 
-        << " | Time: " 
-        << chrono::duration_cast<chrono::milliseconds>(t2 - t1).count() 
-        << " ms\n";
+    out.close();
+}
 
-    // Branch & Bound
-    auto t3 = chrono::high_resolution_clock::now();
-    int res2 = BranchAndBound(n, adj);
-    auto t4 = chrono::high_resolution_clock::now();
-    cout << "BnB: " << res2 
-        << " | Time: " 
-        << chrono::duration_cast<chrono::milliseconds>(t4 - t3).count() 
-        << " ms\n";
+//////////////////////////////////////////////////
+// MAIN
+//////////////////////////////////////////////////
+int main() {
+    // 👉 chạy benchmark toàn bộ
+    runAllTests("testcases.txt", "results.csv");
 
-    // Tabu
-    auto t5 = chrono::high_resolution_clock::now();
-    int res3 = TabuSearch(n, adj);
-    auto t6 = chrono::high_resolution_clock::now();
-    cout << "Tabu: " << res3 
-        << " | Time: " 
-        << chrono::duration_cast<chrono::milliseconds>(t6 - t5).count() 
-        << " ms\n";
+    // 👉 test riêng 1 file (debug)
+    /*
+    int n, m;
+    int **adj = nullptr;
 
-    // free memory
-    for (int i = 0; i <= n; i++) {
-        delete[] adj[i];
-    }
-    delete[] adj;
+    readDIMACS("datasets/testcase1.txt", n, m, &adj);
+
+    cout << "DSATUR: " << DSATUR(n, adj) << endl;
+    cout << "BnB: " << BranchAndBound(n, adj) << endl;
+    cout << "Tabu: " << TabuSearch(n, adj) << endl;
+
+    freeGraph(adj, n);
+    */
 
     return 0;
 }
