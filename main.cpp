@@ -103,72 +103,114 @@ pair<int, long long> measure(Func f) {
 //////////////////////////////////////////////////
 // DSATUR
 //////////////////////////////////////////////////
-int DSATUR(int n, int **adj) {
-    vector<int> color(n+1, 0);
-    vector<int> degree(n+1, 0);
-    vector<int> sat(n+1, 0);
+// Hàm chọn màu thông minh hơn: Least Constraining Color
+int find_smart_color(int u, int n, int** adj, const vector<int>& color, const vector<vector<bool>>& saturation_colors) {
+    int best_color = -1;
+    double max_freedom = -1.0;
+    
+    // Giới hạn số màu thử nghiệm để đảm bảo tốc độ (thường không quá số màu hiện tại + 1)
+    int max_used_color = 0;
+    for (int c : color) if (c > max_used_color) max_used_color = c;
+    int search_limit = max_used_color + 2;
 
-    // tính degree
-    for (int i = 1; i <= n; i++)
-        for (int j = 1; j <= n; j++)
+    for (int c = 0; c < search_limit; c++) {
+        // Nếu màu c không bị xung đột với láng giềng của u
+        if (!saturation_colors[u][c]) {
+            double current_freedom = 0;
+            
+            // Đánh giá "không gian thở" cho láng giềng
+            for (int v = 0; v < n; v++) {
+                if (adj[u][v] && color[v] == -1) {
+                    // Nếu v chưa có màu c, việc chọn c cho u sẽ làm v mất đi 1 lựa chọn
+                    // Ta ưu tiên màu nào mà láng giềng của nó đã có màu đó rồi (không làm mất thêm lựa chọn)
+                    if (saturation_colors[v][c]) {
+                        current_freedom += 1.0; 
+                    } else {
+                        // Tính toán trọng số dựa trên bậc: láng giềng bậc càng cao càng cần được ưu tiên lựa chọn
+                        // current_freedom += 0.0; // Không cộng gì nếu lấy đi 1 lựa chọn của v
+                    }
+                }
+            }
+
+            if (current_freedom > max_freedom) {
+                max_freedom = current_freedom;
+                best_color = c;
+            }
+        }
+    }
+    return (best_color == -1) ? max_used_color + 1 : best_color;
+}
+int DSATUR_SmartColor(int n, int **adj, unsigned int seed) {
+    vector<int> color(n, -1);
+    vector<vector<bool>> saturation_colors(n, vector<bool>(n, false));
+    vector<int> sat_count(n, 0);
+    vector<int> degree(n, 0);
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
             if (adj[i][j]) degree[i]++;
+        }
+    }
 
-    // chọn đỉnh đầu tiên: degree lớn nhất
-    int first = 1;
-    for (int i = 2; i <= n; i++)
-        if (degree[i] > degree[first])
-            first = i;
+    mt19937 g(seed);
+    int colored_count = 0;
 
-    color[first] = 1;
-
-    // update saturation
-    for (int j = 1; j <= n; j++)
-        if (adj[first][j])
-            sat[j]++;
-
-    // lặp
-    for (int step = 2; step <= n; step++) {
-        int u = -1;
-
-        // chọn đỉnh: max sat → tie-break degree
-        for (int i = 1; i <= n; i++) {
-            if (color[i] != 0) continue;
-
-            if (u == -1 || 
-                sat[i] > sat[u] || 
-                (sat[i] == sat[u] && degree[i] > degree[u])) {
-                u = i;
+    while (colored_count < n) {
+        // --- BƯỚC 1 & 2: CHỌN ĐỈNH (GIỮ NGUYÊN NHƯ CODE CŨ) ---
+        int max_sat = -1;
+        vector<int> candidates;
+        for (int i = 0; i < n; i++) {
+            if (color[i] == -1) {
+                if (sat_count[i] > max_sat) {
+                    max_sat = sat_count[i];
+                    candidates.clear();
+                    candidates.push_back(i);
+                } else if (sat_count[i] == max_sat) {
+                    candidates.push_back(i);
+                }
             }
         }
 
-        // tìm màu nhỏ nhất hợp lệ
-        vector<bool> used(n+1, false);
-        for (int j = 1; j <= n; j++)
-            if (adj[u][j] && color[j])
-                used[color[j]] = true;
-
-        int c = 1;
-        while (used[c]) c++;
-
-        color[u] = c;
-
-        // update saturation
-        for (int v = 1; v <= n; v++) {
-            if (adj[u][v] && color[v] == 0) {
-                // kiểm tra xem màu c đã xuất hiện chưa
-                bool found = false;
-                for (int k = 1; k <= n; k++) {
-                    if (adj[v][k] && color[k] == c) {
-                        found = true;
-                        break;
-                    }
+        int u = -1;
+        if (candidates.size() == 1) {
+            u = candidates[0];
+        } else {
+            int max_deg = -1;
+            vector<int> best_candidates;
+            for (int cand : candidates) {
+                if (degree[cand] > max_deg) {
+                    max_deg = degree[cand];
+                    best_candidates.clear();
+                    best_candidates.push_back(cand);
+                } else if (degree[cand] == max_deg) {
+                    best_candidates.push_back(cand);
                 }
-                if (!found) sat[v]++;
+            }
+            uniform_int_distribution<int> dist(0, (int)best_candidates.size() - 1);
+            u = best_candidates[dist(g)];
+        }
+
+        // --- BƯỚC 3: CHỌN MÀU (THAY ĐỔI Ở ĐÂY) ---
+        // Thay find_first_absent bằng hàm chọn màu thông minh
+        int c = find_smart_color(u, n, adj, color, saturation_colors);
+        
+        color[u] = c;
+        colored_count++;
+
+        // --- BƯỚC 4: CẬP NHẬT LÁNG GIỀNG (GIỮ NGUYÊN) ---
+        for (int v = 0; v < n; v++) {
+            if (adj[u][v] && color[v] == -1) {
+                if (!saturation_colors[v][c]) {
+                    saturation_colors[v][c] = true;
+                    sat_count[v]++;
+                }
             }
         }
     }
 
-    return *max_element(color.begin(), color.end());
+    int max_c = 0;
+    for (int i = 0; i < n; i++) max_c = max(max_c, color[i]);
+    return max_c + 1;
 }
 
 //////////////////////////////////////////////////
@@ -253,7 +295,7 @@ void runAllTests(const string &testFile, const string &outputFile) {
 
         // ===================== DSATUR =====================
         pair<int, long long> dsaturRes = measure([&]() {
-            return DSATUR(n, adj);
+            return DSATUR_SmartColor(n, adj, 100);
         });
 
         int dsaturColor = dsaturRes.first;
@@ -262,7 +304,7 @@ void runAllTests(const string &testFile, const string &outputFile) {
         out << tc.filename << ",DSATUR,"
             << dsaturColor << "," << dsaturTime << ","
             << tc.best_k << ","
-            << (dsaturColor == tc.best_k) << "\n";
+            << ((dsaturColor - tc.best_k) > 0 ? dsaturColor - tc.best_k : tc.best_k - dsaturColor) << "\n";
 
 
         // ===================== TABU =====================
@@ -276,7 +318,7 @@ void runAllTests(const string &testFile, const string &outputFile) {
         out << tc.filename << ",Tabu,"
             << tabuColor << "," << tabuTime << ","
             << tc.best_k << ","
-            << (tabuColor == tc.best_k) << "\n";
+            << ((tabuColor - tc.best_k) > 0 ? tabuColor - tc.best_k : tc.best_k - tabuColor) << "\n";
 
 
         // ===================== BRANCH & BOUND =====================
@@ -291,7 +333,7 @@ void runAllTests(const string &testFile, const string &outputFile) {
             out << tc.filename << ",BnB,"
                 << bnbColor << "," << bnbTime << ","
                 << tc.best_k << ","
-                << (bnbColor == tc.best_k) << "\n";
+                << ((bnbColor - tc.best_k) > 0 ? bnbColor - tc.best_k : tc.best_k - bnbColor) << "\n";
         }
 
         // 🧹 Free memory
