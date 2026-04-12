@@ -314,7 +314,7 @@ void runAllTests(const string &testFile, const string &outputFile) {
         // B&B (Chỉ chạy nếu đồ thị cực nhỏ)
         if (n <= 20) {
             auto bnbRes = measure([&]() { return BranchAndBound(n, adj); });
-            out << tc.filename << ",BnB," << bnbRes.first << "," << bnbRes.second << "," << tc.best_k << "," << abs(bnbRes.first - tc.best_k) << "\n";
+            out << tc.filename << ",BnB," << bnbRes.first << "," << bnbRes.second << "," << tc.best_k << "," << abs(bnbRes.first) << "\n";
         }
 
         freeGraph(adj, n);
