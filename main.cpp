@@ -1,5 +1,14 @@
-#include <bits/stdc++.h>
+#include <iostream>
+#include <vector>
+#include <string>
+#include <fstream>
+#include <sstream>
+#include <algorithm>
+#include <ctime>
 #include <chrono>
+#include <cstring>
+#include <random>
+#include <climits>
 
 using namespace std;
 using namespace chrono;
@@ -9,362 +18,313 @@ struct TestCase {
     int n, m, best_k;
 };
 
-//////////////////////////////////////////////////
-// LOAD TESTCASES
-//////////////////////////////////////////////////
+// 📥 LOAD TESTCASES
 vector<TestCase> loadTestcases(const string &file) {
     vector<TestCase> tests;
     ifstream f(file);
+    if (!f.is_open()) return tests;
     string line;
-
     while (getline(f, line)) {
         if (line.empty() || line[0] == '#') continue;
-
         stringstream ss(line);
         string token;
-
         TestCase t;
         int enabled;
-
         getline(ss, t.filename, ',');
         getline(ss, token, ','); t.n = stoi(token);
         getline(ss, token, ','); t.m = stoi(token);
         getline(ss, token, ','); t.best_k = stoi(token);
         getline(ss, token, ','); enabled = stoi(token);
-
-        if (enabled == 1)
-            tests.push_back(t);
+        if (enabled == 1) tests.push_back(t);
     }
-
     return tests;
 }
 
-//////////////////////////////////////////////////
-// READ DIMACS
-//////////////////////////////////////////////////
+// 📖 READ DIMACS (Sửa để dùng 0-based indexing cho đỉnh)
 void readDIMACS(const string &filename, int &n, int &m, int ***adj) {
     ifstream file(filename);
     if (!file.is_open()) {
         cerr << "Cannot open file: " << filename << endl;
         return;
     }
-
     string line;
-
     while (getline(file, line)) {
         if (line.empty() || line[0] == 'c') continue;
-
         if (line[0] == 'p') {
             string tmp1, tmp2;
             stringstream ss(line);
             ss >> tmp1 >> tmp2 >> n >> m;
-
-            *adj = new int*[n + 1];
-            for (int i = 0; i <= n; i++) {
-                (*adj)[i] = new int[n + 1];
-                memset((*adj)[i], 0, (n + 1) * sizeof(int));
+            *adj = new int*[n];
+            for (int i = 0; i < n; i++) {
+                (*adj)[i] = new int[n];
+                memset((*adj)[i], 0, n * sizeof(int));
             }
-        }
-
-        else if (line[0] == 'e') {
+        } else if (line[0] == 'e') {
             char e;
             int u, v;
             stringstream ss(line);
             ss >> e >> u >> v;
-
-            (*adj)[u][v] = 1;
-            (*adj)[v][u] = 1;
+            // Chuyển về 0-based index
+            u--; v--; 
+            if (u >= 0 && u < n && v >= 0 && v < n) {
+                (*adj)[u][v] = 1;
+                (*adj)[v][u] = 1;
+            }
         }
     }
-
     file.close();
 }
 
-//////////////////////////////////////////////////
-// FREE MEMORY
-//////////////////////////////////////////////////
 void freeGraph(int **adj, int n) {
-    for (int i = 0; i <= n; i++) delete[] adj[i];
+    if (adj == nullptr) return;
+    for (int i = 0; i < n; i++) delete[] adj[i];
     delete[] adj;
 }
 
-//////////////////////////////////////////////////
-// TIMER
-//////////////////////////////////////////////////
 template <typename Func>
 pair<int, long long> measure(Func f) {
     auto start = high_resolution_clock::now();
     int result = f();
     auto end = high_resolution_clock::now();
-    long long time = duration_cast<milliseconds>(end - start).count();
-    return {result, time};
+    return {result, duration_cast<milliseconds>(end - start).count()};
 }
 
-//////////////////////////////////////////////////
-// DSATUR
-//////////////////////////////////////////////////
-// Hàm chọn màu thông minh hơn: Least Constraining Color
-int find_smart_color(int u, int n, int** adj, const vector<int>& color, const vector<vector<bool>>& saturation_colors) {
-    int best_color = -1;
-    double max_freedom = -1.0;
-    
-    // Giới hạn số màu thử nghiệm để đảm bảo tốc độ (thường không quá số màu hiện tại + 1)
-    int max_used_color = 0;
-    for (int c : color) if (c > max_used_color) max_used_color = c;
-    int search_limit = max_used_color + 2;
+// --- DSATUR ---
+struct Graph {
+    int n;
+    int **adj;
+    vector<int> degree, color, sat_count;
+    vector<vector<int>> adj_color_count;
 
-    for (int c = 0; c < search_limit; c++) {
-        // Nếu màu c không bị xung đột với láng giềng của u
-        if (!saturation_colors[u][c]) {
-            double current_freedom = 0;
-            
-            // Đánh giá "không gian thở" cho láng giềng
-            for (int v = 0; v < n; v++) {
-                if (adj[u][v] && color[v] == -1) {
-                    // Nếu v chưa có màu c, việc chọn c cho u sẽ làm v mất đi 1 lựa chọn
-                    // Ta ưu tiên màu nào mà láng giềng của nó đã có màu đó rồi (không làm mất thêm lựa chọn)
-                    if (saturation_colors[v][c]) {
-                        current_freedom += 1.0; 
-                    } else {
-                        // Tính toán trọng số dựa trên bậc: láng giềng bậc càng cao càng cần được ưu tiên lựa chọn
-                        // current_freedom += 0.0; // Không cộng gì nếu lấy đi 1 lựa chọn của v
-                    }
-                }
-            }
-
-            if (current_freedom > max_freedom) {
-                max_freedom = current_freedom;
-                best_color = c;
-            }
-        }
+    Graph(int _n, int **_adj) : n(_n), adj(_adj) {
+        degree.assign(n, 0);
+        color.assign(n, -1);
+        adj_color_count.assign(n, vector<int>(n + 1, 0));
+        sat_count.assign(n, 0);
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+                if (adj[i][j]) degree[i]++;
     }
-    return (best_color == -1) ? max_used_color + 1 : best_color;
+
+    void reset() {
+        fill(color.begin(), color.end(), -1);
+        fill(sat_count.begin(), sat_count.end(), 0);
+        for (int i = 0; i < n; i++) fill(adj_color_count[i].begin(), adj_color_count[i].end(), 0);
+    }
+};
+
+int get_smart_color(int u, Graph& g, int current_max) {
+    for (int c = 0; c <= current_max + 1; c++) {
+        if (g.adj_color_count[u][c] == 0) return c;
+    }
+    return current_max + 1;
 }
-int DSATUR_SmartColor(int n, int **adj, unsigned int seed) {
-    vector<int> color(n, -1);
-    vector<vector<bool>> saturation_colors(n, vector<bool>(n, false));
-    vector<int> sat_count(n, 0);
-    vector<int> degree(n, 0);
 
-    for (int i = 0; i < n; i++) {
-        for (int j = 0; j < n; j++) {
-            if (adj[i][j]) degree[i]++;
+int DSATUR_Core(Graph& g, unsigned int seed, const vector<int>& fixed_order = {}) {
+    g.reset();
+    mt19937 rng(seed);
+    int colored = 0, max_c = -1;
+    vector<bool> is_colored(g.n, false);
+
+    for (int u : fixed_order) {
+        if (u < 0 || u >= g.n || is_colored[u]) continue;
+        int c = get_smart_color(u, g, max_c);
+        g.color[u] = c; max_c = max(max_c, c);
+        for (int v = 0; v < g.n; v++) if (g.adj[u][v]) {
+            if (g.adj_color_count[v][c] == 0) g.sat_count[v]++;
+            g.adj_color_count[v][c]++;
         }
+        is_colored[u] = true; colored++;
     }
 
-    mt19937 g(seed);
-    int colored_count = 0;
-
-    while (colored_count < n) {
-        // --- BƯỚC 1 & 2: CHỌN ĐỈNH (GIỮ NGUYÊN NHƯ CODE CŨ) ---
-        int max_sat = -1;
-        vector<int> candidates;
-        for (int i = 0; i < n; i++) {
-            if (color[i] == -1) {
-                if (sat_count[i] > max_sat) {
-                    max_sat = sat_count[i];
-                    candidates.clear();
-                    candidates.push_back(i);
-                } else if (sat_count[i] == max_sat) {
-                    candidates.push_back(i);
-                }
+    while (colored < g.n) {
+        int max_sat = -1, max_deg = -1, u = -1;
+        vector<int> cands;
+        for (int i = 0; i < g.n; i++) {
+            if (g.color[i] == -1) {
+                if (g.sat_count[i] > max_sat) { max_sat = g.sat_count[i]; cands = {i}; }
+                else if (g.sat_count[i] == max_sat) cands.push_back(i);
             }
         }
-
-        int u = -1;
-        if (candidates.size() == 1) {
-            u = candidates[0];
-        } else {
-            int max_deg = -1;
-            vector<int> best_candidates;
-            for (int cand : candidates) {
-                if (degree[cand] > max_deg) {
-                    max_deg = degree[cand];
-                    best_candidates.clear();
-                    best_candidates.push_back(cand);
-                } else if (degree[cand] == max_deg) {
-                    best_candidates.push_back(cand);
-                }
+        if (cands.size() > 1) {
+            vector<int> best_c;
+            for (int cand : cands) {
+                if (g.degree[cand] > max_deg) { max_deg = g.degree[cand]; best_c = {cand}; }
+                else if (g.degree[cand] == max_deg) best_c.push_back(cand);
             }
-            uniform_int_distribution<int> dist(0, (int)best_candidates.size() - 1);
-            u = best_candidates[dist(g)];
-        }
+            u = best_c[rng() % best_c.size()];
+        } else u = cands[0];
 
-        // --- BƯỚC 3: CHỌN MÀU (THAY ĐỔI Ở ĐÂY) ---
-        // Thay find_first_absent bằng hàm chọn màu thông minh
-        int c = find_smart_color(u, n, adj, color, saturation_colors);
-        
-        color[u] = c;
-        colored_count++;
-
-        // --- BƯỚC 4: CẬP NHẬT LÁNG GIỀNG (GIỮ NGUYÊN) ---
-        for (int v = 0; v < n; v++) {
-            if (adj[u][v] && color[v] == -1) {
-                if (!saturation_colors[v][c]) {
-                    saturation_colors[v][c] = true;
-                    sat_count[v]++;
-                }
-            }
+        int c = get_smart_color(u, g, max_c);
+        g.color[u] = c; max_c = max(max_c, c);
+        for (int v = 0; v < g.n; v++) if (g.adj[u][v]) {
+            if (g.adj_color_count[v][c] == 0) g.sat_count[v]++;
+            g.adj_color_count[v][c]++;
         }
+        colored++;
     }
-
-    int max_c = 0;
-    for (int i = 0; i < n; i++) max_c = max(max_c, color[i]);
     return max_c + 1;
 }
 
-//////////////////////////////////////////////////
-// BRANCH & BOUND
-//////////////////////////////////////////////////
-bool isSafe(int u, int c, int n, int **adj, int color[]) {
-    for (int v = 1; v <= n; v++)
-        if (adj[u][v] && color[v] == c)
-            return false;
+int DSATUR_Ultimate(int n, int **adj, int iterations) {
+    Graph g(n, adj);
+    int best_k = DSATUR_Core(g, time(0));
+    for (int i = 0; i < iterations; i++) {
+        vector<int> reorder;
+        for (int j = 0; j < n; j++) 
+            if (g.color[j] >= best_k * 0.7 || (rand() % 100 < 20)) reorder.push_back(j);
+        shuffle(reorder.begin(), reorder.end(), mt19937(time(0) + i));
+        int cur_k = DSATUR_Core(g, time(0) + i, reorder);
+        if (cur_k < best_k) best_k = cur_k;
+    }
+    return best_k;
+}
+
+// --- BRANCH & BOUND (Cảnh báo: Chỉ dành cho n cực nhỏ) ---
+bool isSafe(int u, int c, int n, int **adj, vector<int>& color) {
+    for (int v = 0; v < n; v++) if (adj[u][v] && color[v] == c) return false;
     return true;
 }
 
-void BnB(int u, int usedColors, int &best, int n, int **adj, int color[]) {
-    if (u > n) {
-        best = min(best, usedColors);
-        return;
-    }
-
-    if (usedColors >= best) return;
-
-    for (int c = 1; c <= usedColors + 1; c++) {
+void BnB(int u, int used, int &best, int n, int **adj, vector<int>& color) {
+    if (u == n) { best = min(best, used); return; }
+    if (used >= best) return;
+    for (int c = 1; c <= used + 1; c++) {
         if (isSafe(u, c, n, adj, color)) {
             color[u] = c;
-            BnB(u + 1, max(usedColors, c), best, n, adj, color);
+            BnB(u + 1, max(used, c), best, n, adj, color);
             color[u] = 0;
         }
     }
 }
 
 int BranchAndBound(int n, int **adj) {
-    int color[1000] = {0};
-    int best = INT_MAX;
-    BnB(1, 0, best, n, adj, color);
+    if (n > 25) return -1; // Bảo vệ hệ thống khỏi treo
+    vector<int> color(n, 0);
+    int best = n;
+    BnB(0, 0, best, n, adj, color);
     return best;
 }
 
-//////////////////////////////////////////////////
-// TABU SEARCH (simple)
-//////////////////////////////////////////////////
-int TabuSearch(int n, int **adj, int maxIter, int k) {
-    vector<int> color(n+1);
-    srand(time(0));
+// --- TABU SEARCH ---
+class TabuOptimizer {
+private:
+    int n;
+    int **adj;
+    vector<vector<int>> conflict_count;
+    vector<vector<int>> frequency;
 
-    for (int i = 1; i <= n; i++)
-        color[i] = rand() % k + 1;
+public:
+    TabuOptimizer(int _n, int **_adj) : n(_n), adj(_adj) {}
 
-    for (int iter = 0; iter < maxIter; iter++) {
-        int conflict = 0;
-
-        for (int i = 1; i <= n; i++)
-            for (int j = i+1; j <= n; j++)
-                if (adj[i][j] && color[i] == color[j])
-                    conflict++;
-
-        if (conflict == 0) return k;
-
-        int u = rand() % n + 1;
-        color[u] = rand() % k + 1;
+    void initConflictMatrix(int k, const vector<int>& colors) {
+        conflict_count.assign(n, vector<int>(k, 0));
+        for (int u = 0; u < n; u++)
+            for (int v = 0; v < n; v++)
+                if (adj[u][v]) conflict_count[u][colors[v]]++;
     }
 
-    return k;
-}
+    int countConflicts(const vector<int>& colors) {
+        int cnt = 0;
+        for (int u = 0; u < n; u++)
+            for (int v = u + 1; v < n; v++)
+                if (adj[u][v] && colors[u] == colors[v]) cnt++;
+        return cnt;
+    }
 
-//////////////////////////////////////////////////
-// RUN ALL TESTS
-//////////////////////////////////////////////////
+    bool solve(int k, int maxIter, int L, int alpha, int tolerance, vector<int>& colors) {
+        initConflictMatrix(k, colors);
+        frequency.assign(n, vector<int>(k, 0));
+        int cur_conf = countConflicts(colors);
+        int best_conf = cur_conf;
+        vector<int> best_sol = colors;
+        vector<vector<int>> tabu(n, vector<int>(k, 0));
+        int no_improve = 0;
+
+        for (int iter = 1; iter <= maxIter; iter++) {
+            if (best_conf == 0) { colors = best_sol; return true; }
+            int best_m_delta = INT_MAX, m_node = -1, m_color = -1;
+
+            for (int u = 0; u < n; u++) {
+                if (conflict_count[u][colors[u]] > 0) {
+                    for (int c = 0; c < k; c++) {
+                        if (c == colors[u]) continue;
+                        int delta = conflict_count[u][c] - conflict_count[u][colors[u]];
+                        int penalty = (no_improve > tolerance) ? (alpha * frequency[u][c]) : 0;
+                        if (tabu[u][c] <= iter || cur_conf + delta < best_conf) {
+                            if (delta + penalty < best_m_delta) {
+                                best_m_delta = delta + penalty; m_node = u; m_color = c;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (m_node != -1) {
+                int old_c = colors[m_node];
+                for (int v = 0; v < n; v++) if (adj[m_node][v]) {
+                    conflict_count[v][old_c]--; conflict_count[v][m_color]++;
+                }
+                cur_conf += (conflict_count[m_node][m_color] - conflict_count[m_node][old_c]);
+                colors[m_node] = m_color;
+                tabu[m_node][old_c] = iter + L;
+                frequency[m_node][m_color]++;
+                if (cur_conf < best_conf) { best_conf = cur_conf; best_sol = colors; no_improve = 0; }
+                else no_improve++;
+            }
+        }
+        colors = best_sol;
+        return best_conf == 0;
+    }
+};
+
+// --- RUN TESTS ---
 void runAllTests(const string &testFile, const string &outputFile) {
     vector<TestCase> tests = loadTestcases(testFile);
-
     ofstream out(outputFile);
     out << "filename,algorithm,result,time_ms,best,match\n";
 
     for (const TestCase &tc : tests) {
-        int n, m;
-        int **adj = nullptr;
+        int n, m; int **adj = nullptr;
+        readDIMACS("datasets/" + tc.filename, n, m, &adj);
+        if (!adj) continue;
 
-        // 📥 Load graph
-        string path = "datasets/" + tc.filename;
-        readDIMACS(path, n, m, &adj);
+        cout << "Running: " << tc.filename << " (n=" << n << ")" << endl;
 
-        cout << "Running: " << tc.filename << endl;
+        // DSATUR
+        auto dsRes = measure([&]() { return DSATUR_Ultimate(n, adj, 100); });
+        out << tc.filename << ",DSATUR," << dsRes.first << "," << dsRes.second << "," << tc.best_k << "," << abs(dsRes.first) << "\n";
 
-        // ===================== DSATUR =====================
-        pair<int, long long> dsaturRes = measure([&]() {
-            return DSATUR_SmartColor(n, adj, 100);
+        // TABU
+        auto tbRes = measure([&]() {
+            TabuOptimizer opt(n, adj);
+            vector<int> colors(n);
+            for(int i=0; i<n; i++) colors[i] = rand() % tc.best_k;
+            int best_k = tc.best_k;
+            bool ok = opt.solve(best_k, 50000, n/10+2, 5, 2500, colors);
+            // while (!ok) {
+            //     for(int i=0; i<n; i++) colors[i] = rand() % (tc.best_k + 1);
+            //     ok = opt.solve(best_k + 1, 50000, n/10+2, 5, 2500, colors);
+            //     best_k++; // Tăng k nếu vẫn không tìm được giải pháp hợp lệ
+            // }
+            return ok ? tc.best_k : best_k; // Trả về k+1 nếu còn xung đột
         });
+        out << tc.filename << ",Tabu," << tbRes.first << "," << tbRes.second << "," << tc.best_k << "," << abs(tbRes.first) << "\n";
 
-        int dsaturColor = dsaturRes.first;
-        long long dsaturTime = dsaturRes.second;
-
-        out << tc.filename << ",DSATUR,"
-            << dsaturColor << "," << dsaturTime << ","
-            << tc.best_k << ","
-            << ((dsaturColor - tc.best_k) > 0 ? dsaturColor - tc.best_k : tc.best_k - dsaturColor) << "\n";
-
-
-        // ===================== TABU =====================
-        pair<int, long long> tabuRes = measure([&]() {
-            return TabuSearch(n, adj, 1000, tc.best_k);
-        });
-
-        int tabuColor = tabuRes.first;
-        long long tabuTime = tabuRes.second;
-
-        out << tc.filename << ",Tabu,"
-            << tabuColor << "," << tabuTime << ","
-            << tc.best_k << ","
-            << ((tabuColor - tc.best_k) > 0 ? tabuColor - tc.best_k : tc.best_k - tabuColor) << "\n";
-
-
-        // ===================== BRANCH & BOUND =====================
-        if (n <= 100) {
-            pair<int, long long> bnbRes = measure([&]() {
-                return BranchAndBound(n, adj);
-            });
-
-            int bnbColor = bnbRes.first;
-            long long bnbTime = bnbRes.second;
-
-            out << tc.filename << ",BnB,"
-                << bnbColor << "," << bnbTime << ","
-                << tc.best_k << ","
-                << ((bnbColor - tc.best_k) > 0 ? bnbColor - tc.best_k : tc.best_k - bnbColor) << "\n";
+        // B&B (Chỉ chạy nếu đồ thị cực nhỏ)
+        if (n <= 20) {
+            auto bnbRes = measure([&]() { return BranchAndBound(n, adj); });
+            out << tc.filename << ",BnB," << bnbRes.first << "," << bnbRes.second << "," << tc.best_k << "," << abs(bnbRes.first - tc.best_k) << "\n";
         }
 
-        // 🧹 Free memory
         freeGraph(adj, n);
-
-        cout << "Done: " << tc.filename << "\n\n";
+        cout << "Done: " << tc.filename << "\n";
     }
-
     out.close();
 }
 
-//////////////////////////////////////////////////
-// MAIN
-//////////////////////////////////////////////////
 int main() {
-    // 👉 chạy benchmark toàn bộ
+    srand(time(0));
     runAllTests("testcases.txt", "results.csv");
-
-    // 👉 test riêng 1 file (debug)
-    /*
-    int n, m;
-    int **adj = nullptr;
-
-    readDIMACS("datasets/testcase1.txt", n, m, &adj);
-
-    cout << "DSATUR: " << DSATUR(n, adj) << endl;
-    cout << "BnB: " << BranchAndBound(n, adj) << endl;
-    cout << "Tabu: " << TabuSearch(n, adj) << endl;
-
-    freeGraph(adj, n);
-    */
-
     return 0;
 }
